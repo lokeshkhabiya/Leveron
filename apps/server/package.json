@@ -10,11 +10,14 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "express": "^5.1.0",
+    "@exness-clone/db": "workspace:*",
+    "@types/jsonwebtoken": "^9.0.10",
     "cors": "^2.8.5",
     "dotenv": "catalog:",
-    "zod": "catalog:",
-    "@exness-clone/db": "workspace:*"
+    "express": "^5.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "resend": "^6.5.2",
+    "zod": "catalog:"
   },
   "trustedDependencies": [
     "supabase"
