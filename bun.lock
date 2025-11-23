@@ -2,7 +2,7 @@
   "lockfileVersion": 1,
   "workspaces": {
     "": {
-      "name": "exness-clone",
+      "name": "leveron",
       "dependencies": {
         "dotenv": "^17.2.2",
         "zod": "^4.1.11",
@@ -15,7 +15,7 @@
     "apps/server": {
       "name": "server",
       "dependencies": {
-        "@exness-clone/db": "workspace:*",
+        "@leveron/db": "workspace:*",
         "@types/jsonwebtoken": "^9.0.10",
         "cors": "^2.8.5",
         "dotenv": "catalog:",
@@ -25,7 +25,7 @@
         "zod": "catalog:",
       },
       "devDependencies": {
-        "@exness-clone/config": "workspace:*",
+        "@leveron/config": "workspace:*",
         "@types/cors": "^2.8.17",
         "@types/express": "^5.0.1",
         "@types/node": "catalog:",
@@ -66,11 +66,11 @@
       },
     },
     "packages/config": {
-      "name": "@exness-clone/config",
+      "name": "@leveron/config",
       "version": "0.0.0",
     },
     "packages/db": {
-      "name": "@exness-clone/db",
+      "name": "@leveron/db",
       "dependencies": {
         "@prisma/adapter-pg": "^7.0.0",
         "@prisma/client": "catalog:",
@@ -79,7 +79,7 @@
         "zod": "catalog:",
       },
       "devDependencies": {
-        "@exness-clone/config": "workspace:*",
+        "@leveron/config": "workspace:*",
         "@types/pg": "^8.11.11",
         "prisma": "^7.0.0",
       },
@@ -180,10 +180,6 @@
 
     "@esbuild/win32-x64": ["@esbuild/win32-x64@0.25.12", "", { "os": "win32", "cpu": "x64" }, "sha512-alJC0uCZpTFrSL0CCDjcgleBXPnCrEAhTBILpeAp7M/OFgoqtAetfBzX0xM00MUsVVPpVjlPuMbREqnZCXaTnA=="],
 
-    "@exness-clone/config": ["@exness-clone/config@workspace:packages/config"],
-
-    "@exness-clone/db": ["@exness-clone/db@workspace:packages/db"],
-
     "@floating-ui/core": ["@floating-ui/core@1.7.3", "", { "dependencies": { "@floating-ui/utils": "^0.2.10" } }, "sha512-sGnvb5dmrJaKEZ+LDIpguvdX3bDlEllmv4/ClQ9awcmCZrlx5jQyyMWFM5kBI+EyNOCDDiKk8il0zeuX3Zlg/w=="],
 
     "@floating-ui/dom": ["@floating-ui/dom@1.7.4", "", { "dependencies": { "@floating-ui/core": "^1.7.3", "@floating-ui/utils": "^0.2.10" } }, "sha512-OOchDgh4F2CchOX94cRVqhvy7b3AFb+/rQXyswmzmGakRfkMgoWVjfnLWkRirfLEfuD4ysVW16eXzwt3jHIzKA=="],
@@ -253,6 +249,10 @@
     "@jridgewell/sourcemap-codec": ["@jridgewell/sourcemap-codec@1.5.5", "", {}, "sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og=="],
 
     "@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.31", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.1.0", "@jridgewell/sourcemap-codec": "^1.4.14" } }, "sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw=="],
+
+    "@leveron/config": ["@leveron/config@workspace:packages/config"],
+
+    "@leveron/db": ["@leveron/db@workspace:packages/db"],
 
     "@mrleebo/prisma-ast": ["@mrleebo/prisma-ast@0.12.1", "", { "dependencies": { "chevrotain": "^10.5.0", "lilconfig": "^2.1.0" } }, "sha512-JwqeCQ1U3fvccttHZq7Tk0m/TMC6WcFAQZdukypW3AzlJYKYTGNVd1ANU2GuhKnv4UQuOFj3oAl0LLG/gxFN1w=="],
 

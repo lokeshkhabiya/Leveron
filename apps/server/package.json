@@ -10,7 +10,7 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@exness-clone/db": "workspace:*",
+    "@leveron/db": "workspace:*",
     "@types/jsonwebtoken": "^9.0.10",
     "cors": "^2.8.5",
     "dotenv": "catalog:",
@@ -29,6 +29,6 @@
     "tsx": "^4.19.2",
     "@types/node": "catalog:",
     "tsdown": "^0.16.5",
-    "@exness-clone/config": "workspace:*"
+    "@leveron/config": "workspace:*"
   }
 }

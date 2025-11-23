@@ -15,8 +15,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-	title: "exness-clone",
-	description: "exness-clone",
+	title: "leveron",
+	description: "leveron",
 };
 
 export default function RootLayout({

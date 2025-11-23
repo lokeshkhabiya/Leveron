@@ -1,4 +1,4 @@
-# exness-clone
+# leveron
 
 This project is a modern TypeScript stack that combines Next.js, Express, and more.
 
@@ -52,7 +52,7 @@ The API is running at [http://localhost:8080](http://localhost:8080).
 ## Project Structure
 
 ```
-exness-clone/
+leveron/
 ├── apps/
 │   ├── web/         # Frontend application (Next.js)
 │   └── server/      # Backend API (Express)

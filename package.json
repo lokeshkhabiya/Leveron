@@ -1,5 +1,5 @@
 {
-  "name": "exness-clone",
+  "name": "leveron",
   "private": true,
   "type": "module",
   "workspaces": {
@@ -22,10 +22,10 @@
     "dev:native": "turbo -F native dev",
     "dev:web": "turbo -F web dev",
     "dev:server": "turbo -F server dev",
-    "db:push": "turbo -F @exness-clone/db db:push",
-    "db:studio": "turbo -F @exness-clone/db db:studio",
-    "db:generate": "turbo -F @exness-clone/db db:generate",
-    "db:migrate": "turbo -F @exness-clone/db db:migrate"
+    "db:push": "turbo -F @leveron/db db:push",
+    "db:studio": "turbo -F @leveron/db db:studio",
+    "db:generate": "turbo -F @leveron/db db:generate",
+    "db:migrate": "turbo -F @leveron/db db:migrate"
   },
   "dependencies": {
     "dotenv": "^17.2.2",

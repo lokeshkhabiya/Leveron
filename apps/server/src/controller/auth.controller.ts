@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import prisma from "@exness-clone/db";
+import prisma from "@leveron/db";
 import { generateSignupToken, jwtsign, verifySignupToken } from "@/utils/jwt";
 import { sendMagicLinkToUser } from "@/utils/resendmail";
 import { setAuthCookie } from "@/utils/cookie";
