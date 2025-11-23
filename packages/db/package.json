@@ -1,0 +1,33 @@
+{
+  "name": "@exness-clone/db",
+  "type": "module",
+  "exports": {
+    ".": {
+      "default": "./src/index.ts"
+    },
+    "./*": {
+      "default": "./src/*.ts"
+    }
+  },
+  "scripts": {
+    "db:push": "prisma db push",
+    "db:studio": "prisma studio",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev"
+  },
+  "devDependencies": {
+    "prisma": "^7.0.0",
+    "@types/pg": "^8.11.11",
+    "@exness-clone/config": "workspace:*"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@prisma/client": "catalog:",
+    "@prisma/adapter-pg": "^7.0.0",
+    "pg": "^8.14.1",
+    "dotenv": "catalog:",
+    "zod": "catalog:"
+  }
+}
