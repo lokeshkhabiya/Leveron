@@ -1,0 +1,26 @@
+{
+  "name": "poller",
+  "module": "index.ts",
+  "type": "module",
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsx watch index.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "tsx": "^4.19.2",
+    "@types/node": "catalog:",
+    "tsdown": "^0.16.5",
+    "@leveron/config": "workspace:*"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@leveron/redis": "workspace:*",
+    "@types/axios": "^0.14.4",
+    "@types/ws": "^8.18.1",
+    "axios": "^1.13.2",
+    "ws": "^8.18.3"
+  }
+}
