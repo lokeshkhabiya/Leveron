@@ -10,6 +10,32 @@ datasource db {
 }
 
 model users {
-    user_id String  @id @default(uuid()) @db.Uuid
-    email   String? @unique @db.VarChar(255)
+    user_id      String  @id @default(uuid()) @db.Uuid
+    email        String? @unique @db.VarChar(255)
+    lastLoggedIn String?
+
+    existingTrade existingTrade[]
+}
+
+model existingTrade {
+    id         String   @id @default(uuid()) @db.Uuid
+    openPrice  Float
+    closePrice Float
+    leverage   Float
+    pnl        Float
+    asset      Asset    @relation(fields: [assetId], references: [id])
+    assetId    String   @db.Uuid
+    liquidated Boolean
+    user       users    @relation(fields: [userId], references: [user_id])
+    userId     String   @db.Uuid
+    createdAt  DateTime @default(now())
+}
+
+model Asset {
+    id       String @id @default(uuid()) @db.Uuid
+    symbol   String
+    imageUrl String
+    name     String
+
+    existingTrade existingTrade[]
 }

@@ -29,6 +29,7 @@
     "tsx": "^4.19.2",
     "@types/node": "catalog:",
     "tsdown": "^0.16.5",
-    "@leveron/config": "workspace:*"
+    "@leveron/config": "workspace:*",
+    "@leveron/redis": "workspace:*"
   }
 }

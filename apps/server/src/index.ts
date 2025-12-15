@@ -3,13 +3,14 @@ import cors from "cors";
 import express from "express";
 
 import authRouter from "./routes/auth.routes";
-
+import balanceRouter from "./routes/balance.routes";
+import tradeRouter from "./routes/trade.routes";
 const app = express();
 
 app.use(
 	cors({
 		origin: process.env.CORS_ORIGIN || "",
-		methods: ["GET", "POST", "OPTIONS"],
+		methods: ["GET", "POST"],
 	}),
 );
 
@@ -20,6 +21,8 @@ app.get("/", (_req, res) => {
 });
 
 app.use("/api/auth", authRouter);
+app.use("/api/balance", balanceRouter);	
+app.use("/api/trade", tradeRouter);
 
 const port = process.env.PORT || 8080;
 app.listen(port, () => {

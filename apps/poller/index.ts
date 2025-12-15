@@ -1,18 +1,18 @@
 import ws from "ws";
 import redis from "@leveron/redis";
 
-type PriceUpdate = {
+export type PriceUpdate = {
     asset: string;
     price: string;
     timestamp: string;
 };
 
-type PriceUpdates = Map<string, PriceUpdate>;
+export type PriceUpdates = Map<string, PriceUpdate>;
 
-const CONFIG = {
+export const CONFIG = {
     WS_URL: "wss://ws.backpack.exchange/",
     ENGINE_QUEUE: "engine-stream",
-    POLL_INTERVAL_MS: 100,
+    POLL_INTERVAL_MS: 1000,
     SYMBOLS: ["BTC_USDC", "SOL_USDC", "ETH_USDC"] as const,
     ASSET_MAP: {
         BTC_USDC: "BTC",
@@ -27,17 +27,17 @@ let isRedisConnected = false;
 const priceUpdates: PriceUpdates = new Map();
 
 redis.on("connect", () => {
-    console.log("[redis] connected!");
+    console.log("[poller:redis] connected!");
     isRedisConnected = true;
 });
 
 redis.on("error", (error) => {
-    console.error("[redis] error:", error);
+    console.error("[poller:redis] error:", error);
     isRedisConnected = false;
 });
 
 redis.on("close", () => {
-    console.log("[redis] connection closed");
+    console.log("[poller:redis] connection closed");
     isRedisConnected = false;
 });
 
@@ -129,12 +129,12 @@ async function publishPriceUpdates() {
     try {
         const updatesArray = Array.from(priceUpdates.values());
         await redis.xadd(
-          CONFIG.ENGINE_QUEUE,
-          "*",
-          "priceUpdates",
-          JSON.stringify(updatesArray)
+            CONFIG.ENGINE_QUEUE,
+            "*",
+            "priceUpdates",
+            JSON.stringify(updatesArray)
         );
-        // console.log("current prices: ", updatesArray);
+        console.log("[poller] current prices:", updatesArray);
     } catch (error) {
         console.error("[poller] Error publishing to Redis:", error);
     }
