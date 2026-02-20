@@ -25,7 +25,8 @@
     "db:push": "turbo -F @leveron/db db:push",
     "db:studio": "turbo -F @leveron/db db:studio",
     "db:generate": "turbo -F @leveron/db db:generate",
-    "db:migrate": "turbo -F @leveron/db db:migrate"
+    "db:migrate": "turbo -F @leveron/db db:migrate",
+    "db:seed": "turbo -F @leveron/db db:seed"
   },
   "dependencies": {
     "dotenv": "^17.2.2",

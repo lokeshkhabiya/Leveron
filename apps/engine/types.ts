@@ -7,7 +7,7 @@ export type userBalance = {
 }
 
 export type orderSide = "LONG" | "SHORT";
-export type orderStatus = "OPEN" | "CLOSE" | "LIQUIDATED";
+export type orderStatus = "OPEN" | "CLOSED" | "LIQUIDATED";
 
 export type openOrder = {
 	orderId: string;

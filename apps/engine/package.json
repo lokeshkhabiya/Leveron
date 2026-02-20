@@ -13,6 +13,7 @@
 		"typescript": "^5"
 	},
 	"dependencies": {
+		"@leveron/db": "workspace:*",
 		"@leveron/redis": "workspace:*",
 		"@leveron/poller": "workspace:*",
 		"@types/ws": "^8.18.1",

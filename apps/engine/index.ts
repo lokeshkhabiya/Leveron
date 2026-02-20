@@ -1,4 +1,5 @@
 import redis from "@leveron/redis";
+import prisma from "@leveron/db";
 import { type PriceUpdate, type PriceUpdates } from "@leveron/poller";
 import type {
     Asset,
@@ -54,6 +55,23 @@ let assetOrderIndex: Map<Asset, Set<string>> = new Map();
 
 let lastPriceStreamId = "0";
 let lastOrdersStreamId = "0";
+const CALLBACK_QUEUE = "callback-queue";
+const assetIdCache: Map<Asset, string> = new Map();
+
+type CallbackEventType = "TRADE_OPENED" | "TRADE_CLOSED" | "TRADE_ERROR";
+
+type CallbackPayload = {
+    type: CallbackEventType;
+    orderId: string;
+    userId?: string;
+    asset?: Asset;
+    status?: "OPEN" | "CLOSED" | "LIQUIDATED";
+    reason?: CloseReason;
+    entryPrice?: number;
+    closePrice?: number;
+    pnl?: number;
+    message?: string;
+};
 
 redis.on("connect", () => {
     console.log("[engine:redis] connected!");
@@ -69,6 +87,45 @@ redis.on("close", () => {
     console.log("[engine:redis] connection closed");
     isRedisConnected = false;
 });
+
+function getCloseStatus(reason: CloseReason): "CLOSED" | "LIQUIDATED" {
+    return reason === "LIQUIDATION" ? "LIQUIDATED" : "CLOSED";
+}
+
+async function getAssetId(symbol: Asset): Promise<string> {
+    const cachedId = assetIdCache.get(symbol);
+    if (cachedId) {
+        return cachedId;
+    }
+
+    const asset = await prisma.asset.findUnique({
+        where: { symbol },
+        select: { id: true },
+    });
+
+    if (!asset) {
+        throw new Error(`[engine] Asset not found for symbol: ${symbol}`);
+    }
+
+    assetIdCache.set(symbol, asset.id);
+    return asset.id;
+}
+
+async function publishCallback(payload: CallbackPayload): Promise<void> {
+    try {
+        await redis.xadd(
+            CALLBACK_QUEUE,
+            "*",
+            "event",
+            JSON.stringify({
+                ...payload,
+                timestamp: new Date().toISOString(),
+            })
+        );
+    } catch (error) {
+        console.error("[engine] Failed to publish callback event:", error);
+    }
+}
 
 // function to load user balance from redis
 async function loadUserBalance(userId: string): Promise<userBalance> {
@@ -603,10 +660,55 @@ async function processOpenTrade(openTradeData: {
 
         assetOrderIndex.get(openOrder.asset)!.add(openOrder.orderId);
 
+        const assetId = await getAssetId(openOrder.asset);
+
+        await prisma.order.create({
+            data: {
+                id: openOrder.orderId,
+                userId: openOrder.userId,
+                assetId,
+                side: openOrder.side,
+                quantity: openOrder.quantity,
+                margin: openOrder.margin,
+                leverage: openOrder.leverage,
+                entryPrice: openOrder.entryPrice,
+                status: "OPEN",
+                closeReason: null,
+                takeProfit: openOrder.takeProfit ?? null,
+                stopLoss: openOrder.stopLoss ?? null,
+                liquidationPrice: openOrder.liquidationPrice,
+                createdAt: openOrder.createdAt,
+                updatedAt: openOrder.updatedAt,
+                closedAt: null,
+                closePrice: null,
+                pnl: null,
+            },
+        });
+
+        await publishCallback({
+            type: "TRADE_OPENED",
+            orderId: openOrder.orderId,
+            userId: openOrder.userId,
+            asset: openOrder.asset,
+            status: "OPEN",
+            entryPrice: openOrder.entryPrice,
+        });
+
         console.log(
             `[engine] Open trade ${openTradeData.orderId} processed successfully.`
         );
     } catch (error) {
+        await publishCallback({
+            type: "TRADE_ERROR",
+            orderId: openTradeData.orderId,
+            userId: openTradeData.userId,
+            asset: openTradeData.asset as Asset,
+            message:
+                error instanceof Error
+                    ? error.message
+                    : "Unknown error while opening trade",
+        });
+
         console.error(
             `[engine] Error processing open trade ${openTradeData.orderId}:`,
             error
@@ -620,64 +722,105 @@ async function processCloseTrade(
     reason: CloseReason
 ): Promise<void> {
     const order = openOrders.get(orderId);
-    if (!order) {
-        throw new Error(`Order ${orderId} not found`);
-    }
 
-    const priceUpdate = currentPrices.get(order.asset);
-    if (!priceUpdate) {
-        throw new Error(`No current price available for asset: ${order.asset}`);
-    }
-
-    const markPrice = parseFloat(priceUpdate.price);
-
-    // 1. compute pnl
-    const pnl = calculatePnl(order, markPrice);
-    const closeFee = calculateFee(order, markPrice, "CLOSE");
-
-    // 2. load user balance
-    const balance = await getOrLoadUserBalance(order.userId);
-
-    // 3. unlock margin and realized pnl - fees
-    balance.locked -= order.margin;
-    if (balance.locked < 0) {
-        balance.locked = 0;
-    }
-
-    const realizedAmount = order.margin + pnl - closeFee;
-    balance.available += realizedAmount;
-    balance.total = balance.available + balance.locked;
-
-    balances.set(order.userId, balance);
-    await updateBalanceInRedis(order.userId, balance);
-
-    // 4. update order state
-    const now = new Date();
-    order.status = reason === "LIQUIDATION" ? "LIQUIDATED" : "CLOSE";
-    order.updatedAt = now;
-
-    // 5. remove order from openOrders and index
-    openOrders.delete(orderId);
-
-    const userOrders = userOrderIndex.get(order.userId);
-    if (userOrders) {
-        userOrders.delete(orderId);
-        if (userOrders.size === 0) {
-            userOrderIndex.delete(order.userId);
+    try {
+        if (!order) {
+            throw new Error(`Order ${orderId} not found`);
         }
-    }
 
-    const assetOrders = assetOrderIndex.get(order.asset);
-    if (assetOrders) {
-        assetOrders.delete(orderId);
-        if (assetOrders.size === 0) {
-            assetOrderIndex.delete(order.asset);
+        const priceUpdate = currentPrices.get(order.asset);
+        if (!priceUpdate) {
+            throw new Error(`No current price available for asset: ${order.asset}`);
         }
-    }
 
-    console.log(
-        `[engine] close tab ${orderId}. reason=${reason}, pnl=${pnl} fee=${closeFee}, closePrice=${markPrice}`
-    );
+        const markPrice = parseFloat(priceUpdate.price);
+
+        // 1. compute pnl
+        const pnl = calculatePnl(order, markPrice);
+        const closeFee = calculateFee(order, markPrice, "CLOSE");
+
+        // 2. load user balance
+        const balance = await getOrLoadUserBalance(order.userId);
+
+        // 3. unlock margin and realized pnl - fees
+        balance.locked -= order.margin;
+        if (balance.locked < 0) {
+            balance.locked = 0;
+        }
+
+        const realizedAmount = order.margin + pnl - closeFee;
+        balance.available += realizedAmount;
+        balance.total = balance.available + balance.locked;
+
+        balances.set(order.userId, balance);
+        await updateBalanceInRedis(order.userId, balance);
+
+        // 4. update order state
+        const now = new Date();
+        const closeStatus = getCloseStatus(reason);
+        order.status = closeStatus;
+        order.updatedAt = now;
+
+        await prisma.order.update({
+            where: { id: order.orderId },
+            data: {
+                closePrice: markPrice,
+                pnl,
+                status: closeStatus,
+                closeReason: reason,
+                updatedAt: now,
+                closedAt: now,
+            },
+        });
+
+        // 5. remove order from openOrders and index
+        openOrders.delete(orderId);
+
+        const userOrders = userOrderIndex.get(order.userId);
+        if (userOrders) {
+            userOrders.delete(orderId);
+            if (userOrders.size === 0) {
+                userOrderIndex.delete(order.userId);
+            }
+        }
+
+        const assetOrders = assetOrderIndex.get(order.asset);
+        if (assetOrders) {
+            assetOrders.delete(orderId);
+            if (assetOrders.size === 0) {
+                assetOrderIndex.delete(order.asset);
+            }
+        }
+
+        await publishCallback({
+            type: "TRADE_CLOSED",
+            orderId,
+            userId: order.userId,
+            asset: order.asset,
+            reason,
+            status: closeStatus,
+            closePrice: markPrice,
+            pnl,
+        });
+
+        console.log(
+            `[engine] close tab ${orderId}. reason=${reason}, pnl=${pnl} fee=${closeFee}, closePrice=${markPrice}`
+        );
+    } catch (error) {
+        await publishCallback({
+            type: "TRADE_ERROR",
+            orderId,
+            userId: order?.userId,
+            asset: order?.asset,
+            reason,
+            message:
+                error instanceof Error
+                    ? error.message
+                    : "Unknown error while closing trade",
+        });
+
+        throw error;
+    }
 }
 
 async function startEngine() {
