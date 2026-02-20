@@ -50,6 +50,7 @@ let currentPrices: PriceUpdates = new Map<string, PriceUpdate>();
 let balances: Map<string, userBalance> = new Map();
 let openOrders: Map<string, openOrder> = new Map();
 let userOrderIndex: Map<string, Set<string>> = new Map();
+let assetOrderIndex: Map<Asset, Set<string>> = new Map();
 
 let lastPriceStreamId = "0";
 let lastOrdersStreamId = "0";
@@ -85,6 +86,15 @@ async function loadUserBalance(userId: string): Promise<userBalance> {
     }
 
     return JSON.parse(balanceData) as userBalance;
+}
+
+async function getOrLoadUserBalance(userId: string): Promise<userBalance> {
+    let balance = balances.get(userId);
+    if (!balance) {
+        balance = await loadUserBalance(userId);
+        balances.set(userId, balance);
+    }
+    return balance;
 }
 
 // helper function to update balance in redis.
@@ -286,6 +296,139 @@ async function updateBalanceForOpenTrade(userId: string, margin: number) {
     await updateBalanceInRedis(userId, balance);
 }
 
+async function checkAndTriggerTakeProfit_StopLoss(
+    asset: Asset,
+    markPrice: number
+): Promise<void> {
+    const ordersForAsset = assetOrderIndex.get(asset);
+
+    if (!ordersForAsset || ordersForAsset.size === 0) {
+        return;
+    }
+
+    for (const orderId of ordersForAsset) {
+        const order = openOrders.get(orderId);
+
+        if (!order || order.status !== "OPEN") continue;
+
+        let shouldClose = false;
+        let reason: CloseReason | null = null;
+
+        if (order.side === "LONG") {
+            if (order.takeProfit && markPrice >= order.takeProfit) {
+                shouldClose = true;
+                reason = "TAKE_PROFIT";
+            } else if (order.stopLoss && markPrice <= order.stopLoss) {
+                shouldClose = true;
+                reason = "STOP_LOSS";
+            }
+        } else {
+            if (order.takeProfit && markPrice <= order.takeProfit) {
+                shouldClose = true;
+                reason = "TAKE_PROFIT";
+            } else if (order.stopLoss && markPrice >= order.stopLoss) {
+                shouldClose = true;
+                reason = "STOP_LOSS";
+            }
+        }
+
+        if (shouldClose && reason) {
+            try {
+                await processCloseTrade(orderId, reason); 
+            } catch (error) {
+                console.error(`[engine] Error closing order ${orderId} via TP/SL:`, error);
+            }
+        }
+    }
+}
+
+// Helper to convert currentPrices to Map<Asset, number> for calculations
+function getMarkPricesMap(): Map<Asset, number> {
+    const markPrices = new Map<Asset, number>();
+    for (const [asset, priceUpdate] of currentPrices.entries()) {
+        markPrices.set(asset as Asset, parseFloat(priceUpdate.price));
+    }
+    return markPrices;
+} 
+
+
+async function checkAndTriggerLiquidation() {
+    const markPrices = getMarkPricesMap(); 
+
+    const userOrdersMap = new Map<string, openOrder[]>(); 
+
+    for (const order of openOrders.values()) {
+        if (order.status !== "OPEN") continue; 
+        
+        if (!userOrdersMap.has(order.userId)) {
+            userOrdersMap.set(order.userId, []); 
+        }
+
+        userOrdersMap.get(order.userId)!.push(order); 
+    }
+
+    // check each user's positions 
+    for (const [userId, orders] of userOrdersMap.entries()) {
+        if (orders.length === 0) continue; 
+
+        const balance = await getOrLoadUserBalance(userId); 
+
+        // calculate equity and used margin 
+        const equity = calculateEquity(balance, orders, markPrices); 
+        const usedMargin = orders.reduce((sum, order) => sum + order.margin, 0); 
+
+        // check if liquidation required or not - equity <= 0 ( 100% loss )
+        const minEquityRequired = usedMargin * ASSET_CONFIG[orders[0]!.asset].maintenanceMarginRate;
+
+        if (equity <= minEquityRequired || equity <= 0) {
+            console.log(
+                `[engine:LIQUIDATION] User ${userId} requires liquidation. equity=${equity}, usedMargin=${usedMargin}, minRequired=${minEquityRequired}`
+            );
+
+            // Prioritize liquidating the worst losing positions first.
+            const ordersWithPnl = orders
+                .map((order) => {
+                    const markPrice = markPrices.get(order.asset);
+                    if (markPrice === undefined) {
+                        return null;
+                    }
+
+                    return {
+                        order,
+                        pnl: calculatePnl(order, markPrice),
+                    };
+                })
+                .filter(
+                    (
+                        value
+                    ): value is {
+                        order: openOrder;
+                        pnl: number;
+                    } => value !== null
+                )
+                .sort((a, b) => a.pnl - b.pnl);
+
+            for (const { order } of ordersWithPnl) {
+                if (!openOrders.has(order.orderId)) {
+                    continue;
+                }
+
+                try {
+                    await processCloseTrade(order.orderId, "LIQUIDATION");
+                } catch (error) {
+                    console.error(
+                        `[engine] Error liquidating order ${order.orderId}:`,
+                        error
+                    );
+                }
+            }
+        }
+
+    }
+}
+
+let lastCloseOrdersStreamId = "0"; 
+
 async function processStreamMessages() {
     if (!isRedisConnected) {
         console.warn("[engine] redis not connected, waiting...");
@@ -301,8 +444,10 @@ async function processStreamMessages() {
             "STREAMS",
             "engine-stream",
             "orders-stream",
+            "close-orders-stream",
             lastPriceStreamId,
-            lastOrdersStreamId
+            lastOrdersStreamId,
+            lastCloseOrdersStreamId,
         );
 
         if (data?.[0]) {
@@ -317,7 +462,13 @@ async function processStreamMessages() {
 
                             for (const update of priceUpdates) {
                                 currentPrices.set(update.asset, update);
+
+                                const markPrice = parseFloat(update.price);
+                                await checkAndTriggerTakeProfit_StopLoss(update.asset as Asset, markPrice);
                             }
+
+                            // after all prices updates, check for liquidations 
+                            await checkAndTriggerLiquidation(); 
 
                             console.log(
                                 `[engine] Processed ${priceUpdates.length} price update(s). Current prices:`,
@@ -335,6 +486,19 @@ async function processStreamMessages() {
                             );
 
                             await processOpenTrade(openTradeData);
+                        } else if (streamName === "close-orders-stream") {
+                            // handle close orders 
+                            lastCloseOrdersStreamId = id;
+                            const closeOrderData = JSON.parse(
+                                fields[1] as string 
+                            ) as { orderId: string; userId: string };
+
+                            console.log(
+                                `[engine] Processing close order:`,
+                                closeOrderData
+                            );
+
+                            await processCloseTrade(closeOrderData.orderId, "USER");
                         }
                     } catch (error) {
                         console.log(
@@ -432,6 +596,13 @@ async function processOpenTrade(openTradeData: {
         }
         userOrderIndex.get(openOrder.userId)!.add(openOrder.orderId);
 
+        // maintain asset index
+        if (!assetOrderIndex.has(openOrder.asset)) {
+            assetOrderIndex.set(openOrder.asset, new Set());
+        }
+
+        assetOrderIndex.get(openOrder.asset)!.add(openOrder.orderId);
+
         console.log(
             `[engine] Open trade ${openTradeData.orderId} processed successfully.`
         );
@@ -448,7 +619,65 @@ async function processCloseTrade(
     orderId: string,
     reason: CloseReason
 ): Promise<void> {
-    
+    const order = openOrders.get(orderId);
+    if (!order) {
+        throw new Error(`Order ${orderId} not found`);
+    }
+
+    const priceUpdate = currentPrices.get(order.asset);
+    if (!priceUpdate) {
+        throw new Error(`No current price available for asset: ${order.asset}`);
+    }
+
+    const markPrice = parseFloat(priceUpdate.price);
+
+    // 1. compute pnl
+    const pnl = calculatePnl(order, markPrice);
+    const closeFee = calculateFee(order, markPrice, "CLOSE");
+
+    // 2. load user balance
+    const balance = await getOrLoadUserBalance(order.userId);
+
+    // 3. unlock margin and realized pnl - fees
+    balance.locked -= order.margin;
+    if (balance.locked < 0) {
+        balance.locked = 0;
+    }
+
+    const realizedAmount = order.margin + pnl - closeFee;
+    balance.available += realizedAmount;
+    balance.total = balance.available + balance.locked;
+
+    balances.set(order.userId, balance);
+    await updateBalanceInRedis(order.userId, balance);
+
+    // 4. update order state
+    const now = new Date();
+    order.status = reason === "LIQUIDATION" ? "LIQUIDATED" : "CLOSE";
+    order.updatedAt = now;
+
+    // 5. remove order from openOrders and index
+    openOrders.delete(orderId);
+
+    const userOrders = userOrderIndex.get(order.userId);
+    if (userOrders) {
+        userOrders.delete(orderId);
+        if (userOrders.size === 0) {
+            userOrderIndex.delete(order.userId);
+        }
+    }
+
+    const assetOrders = assetOrderIndex.get(order.asset);
+    if (assetOrders) {
+        assetOrders.delete(orderId);
+        if (assetOrders.size === 0) {
+            assetOrderIndex.delete(order.asset);
+        }
+    }
+
+    console.log(
+        `[engine] close tab ${orderId}. reason=${reason}, pnl=${pnl} fee=${closeFee}, closePrice=${markPrice}`
+    );
 }
 
 async function startEngine() {

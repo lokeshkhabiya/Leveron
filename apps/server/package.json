@@ -12,6 +12,7 @@
   "dependencies": {
     "@leveron/db": "workspace:*",
     "@types/jsonwebtoken": "^9.0.10",
+    "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "dotenv": "catalog:",
     "express": "^5.1.0",
@@ -26,6 +27,7 @@
     "typescript": "catalog:",
     "@types/express": "^5.0.1",
     "@types/cors": "^2.8.17",
+    "@types/cookie-parser": "^1.4.10",
     "tsx": "^4.19.2",
     "@types/node": "catalog:",
     "tsdown": "^0.16.5",

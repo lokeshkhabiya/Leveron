@@ -4,7 +4,7 @@ const apiKey = process.env.RESEND_API_KEY!;
 const resend = new Resend(apiKey);
 
 export async function sendMagicLinkToUser(email: string, link: string) {
-	const mailSent = await resend.emails.send({
+	await resend.emails.send({
 		from: "onboarding@resend.dev",
 		to: email,
 		subject: "Verify your email to get started on Leveron",

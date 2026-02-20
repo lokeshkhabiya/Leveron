@@ -1,5 +1,5 @@
 import type { extendedRequest } from "@/middleware/auth.middleware";
-import { AddOpenTradeToEngine } from "@/services/trades.service";
+import { AddCloseTradeToEngine, AddOpenTradeToEngine } from "@/services/trades.service";
 import type { Request, Response } from "express";
 import z from "zod";
 
@@ -12,6 +12,10 @@ const createTradeSchema = z.object({
     stopLoss: z.float32().optional(),
     slippage: z.number().int(),
 });
+
+const closeTradeSchema = z.object({
+    orderId: z.string().uuid() 
+})
 
 const createTrade = async (req: Request, res: Response) => {
     try {
@@ -58,13 +62,27 @@ const createTrade = async (req: Request, res: Response) => {
 
 const closeTrade = async (req: Request, res: Response) => {
     try {
-        // TODO: Add trade closing logic
         const user = (req as extendedRequest).user;
+        const userId = user.id; 
 
-        console.log("User: ", user);
+        const { success, error, data } = closeTradeSchema.safeParse(req.body);
+
+        if (!success) {
+            return res.status(400).json({
+                success: false, 
+                message: "Error while validating body: ", 
+                error, 
+            })
+        }
+
+        const { orderId } = data; 
+
+        await AddCloseTradeToEngine(orderId, userId);
+
         return res.status(200).json({
             success: true,
             message: "Trade closed successfully",
+            orderId
         });
     } catch (error) {
         console.error("Error while closing trade: ", error);
