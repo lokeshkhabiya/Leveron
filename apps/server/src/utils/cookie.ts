@@ -9,3 +9,12 @@ export function setAuthCookie(res: Response, token: string) {
 		path: "/",
 	});
 }
+
+export function clearAuthCookie(res: Response) {
+	res.clearCookie("leveron_token", {
+		httpOnly: true,
+		secure: process.env.NODE_ENV === "production",
+		sameSite: "strict",
+		path: "/",
+	});
+}

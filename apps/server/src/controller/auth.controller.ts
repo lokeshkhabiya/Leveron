@@ -1,8 +1,9 @@
 import type { Request, Response } from "express";
 import prisma from "@leveron/db";
+import type { extendedRequest } from "@/middleware/auth.middleware";
 import { generateSignupToken, jwtsign, verifySignupToken } from "@/utils/jwt";
 import { sendMagicLinkToUser } from "@/utils/resendmail";
-import { setAuthCookie } from "@/utils/cookie";
+import { clearAuthCookie, setAuthCookie } from "@/utils/cookie";
 
 const magicLinkBaseUrl = process.env.MAGIC_LINK_BASE_URL!;
 if (!magicLinkBaseUrl) {
@@ -92,7 +93,64 @@ const verify = async (req: Request, res: Response) => {
 	}
 };
 
+const me = async (req: Request, res: Response) => {
+	try {
+		const user = (req as extendedRequest).user;
+
+		const dbUser = await prisma.users.findUnique({
+			where: {
+				user_id: user.id,
+			},
+			select: {
+				user_id: true,
+				email: true,
+				lastLoggedIn: true,
+			},
+		});
+
+		if (!dbUser) {
+			return res.status(404).json({
+				success: false,
+				message: "User not found",
+			});
+		}
+
+		return res.status(200).json({
+			success: true,
+			user: {
+				id: dbUser.user_id,
+				email: dbUser.email,
+				lastLoggedIn: dbUser.lastLoggedIn,
+			},
+		});
+	} catch (error) {
+		console.error("Error while fetching current user:", error);
+		return res.status(500).json({
+			success: false,
+			message: "Internal Server Error!",
+		});
+	}
+};
+
+const logout = async (_req: Request, res: Response) => {
+	try {
+		clearAuthCookie(res);
+		return res.status(200).json({
+			success: true,
+			message: "Logged out successfully",
+		});
+	} catch (error) {
+		console.error("Error while logging out user:", error);
+		return res.status(500).json({
+			success: false,
+			message: "Internal Server Error!",
+		});
+	}
+};
+
 export const authController = {
 	login,
 	verify,
+	me,
+	logout,
 };

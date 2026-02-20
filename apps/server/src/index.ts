@@ -5,7 +5,9 @@ import express from "express";
 
 import authRouter from "./routes/auth.routes";
 import balanceRouter from "./routes/balance.routes";
+import pricesRouter from "./routes/prices.routes";
 import tradeRouter from "./routes/trade.routes";
+import { startCallbackListener } from "./services/callback.service";
 const app = express();
 
 app.use(
@@ -26,8 +28,10 @@ app.get("/", (_req, res) => {
 app.use("/api/auth", authRouter);
 app.use("/api/balance", balanceRouter);	
 app.use("/api/trade", tradeRouter);
+app.use("/api/prices", pricesRouter);
 
 const port = process.env.PORT || 8080;
 app.listen(port, () => {
+	void startCallbackListener();
 	console.log(`Server is running on port ${port}`);
 });
