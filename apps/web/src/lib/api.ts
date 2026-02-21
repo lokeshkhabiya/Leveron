@@ -1,4 +1,7 @@
+import { createLogger } from "./logger";
+
 const DEFAULT_API_BASE_URL = "http://localhost:8080";
+const logger = createLogger("web.api");
 
 function normalizeBaseUrl(value: string) {
 	return value.endsWith("/") ? value.slice(0, -1) : value;
@@ -57,16 +60,31 @@ async function apiRequest<T>(path: string, options: RequestOptions = {}): Promis
 		body = JSON.stringify(options.body);
 	}
 
-	const response = await fetch(getApiUrl(path), {
-		...options,
-		headers,
-		body,
-		credentials: "include",
-	});
+	let response: Response;
+	try {
+		response = await fetch(getApiUrl(path), {
+			...options,
+			headers,
+			body,
+			credentials: "include",
+		});
+	} catch (error) {
+		logger.error("request.network-failed", {
+			path,
+			method: options.method ?? "GET",
+			error: error instanceof Error ? error.message : String(error),
+		});
+		throw new ApiError("Network request failed", 0, null);
+	}
 
 	const json = await readJsonSafe<Record<string, unknown>>(response);
 
 	if (!response.ok) {
+		logger.warn("request.failed", {
+			path,
+			method: options.method ?? "GET",
+			status: response.status,
+		});
 		const message =
 			typeof json?.message === "string" ? json.message : "Request failed";
 		throw new ApiError(message, response.status, json);

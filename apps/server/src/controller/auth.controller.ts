@@ -4,11 +4,13 @@ import type { extendedRequest } from "@/middleware/auth.middleware";
 import { generateSignupToken, jwtsign, verifySignupToken } from "@/utils/jwt";
 import { sendMagicLinkToUser } from "@/utils/resendmail";
 import { clearAuthCookie, setAuthCookie } from "@/utils/cookie";
+import { createLogger } from "@/utils/logger";
 
 const magicLinkBaseUrl = process.env.MAGIC_LINK_BASE_URL!;
 if (!magicLinkBaseUrl) {
 	throw new Error("MAGIC_LINK_BASE_URL is not defined");
 }
+const logger = createLogger("server.auth-controller");
 
 const login = async (req: Request, res: Response) => {
 	try {
@@ -26,16 +28,14 @@ const login = async (req: Request, res: Response) => {
 		const magicLink = `${magicLinkBaseUrl}/verify?token=${encodeURIComponent(token)}`;
 
 		await sendMagicLinkToUser(email, magicLink);
+		logger.info("auth.magic-link.sent", { email });
 
 		return res.status(200).json({
 			success: true,
 			message: "Verification Email Sent Successfully!",
 		});
-	} catch (error: any) {
-		console.log(
-			"Error while signing up the user: ",
-			error.response?.data || error?.message,
-		);
+	} catch (error: unknown) {
+		logger.errorWithCause("auth.login.failed", error);
 		return res.status(500).json({
 			message: "Internal Server Error!",
 		});
@@ -74,19 +74,27 @@ const verify = async (req: Request, res: Response) => {
 			});
 		}
 
+		await prisma.users.update({
+			where: { user_id: user.user_id },
+			data: {
+				lastLoggedIn: new Date().toISOString(),
+			},
+		});
+
 		const cookieToken = jwtsign({
 			id: user?.user_id,
 			email: user.email as string,
 		});
 
 		setAuthCookie(res, cookieToken);
+		logger.info("auth.verify.success", {
+			userId: user.user_id,
+			email: user.email,
+		});
 
 		return res.redirect("http://localhost:3000");
-	} catch (error: any) {
-		console.log(
-			"Error while verifying signup user: ",
-			error.response?.data || error?.message,
-		);
+	} catch (error: unknown) {
+		logger.errorWithCause("auth.verify.failed", error);
 		return res.status(500).json({
 			message: "Internal Server Error!",
 		});
@@ -124,7 +132,7 @@ const me = async (req: Request, res: Response) => {
 			},
 		});
 	} catch (error) {
-		console.error("Error while fetching current user:", error);
+		logger.errorWithCause("auth.me.failed", error);
 		return res.status(500).json({
 			success: false,
 			message: "Internal Server Error!",
@@ -140,7 +148,7 @@ const logout = async (_req: Request, res: Response) => {
 			message: "Logged out successfully",
 		});
 	} catch (error) {
-		console.error("Error while logging out user:", error);
+		logger.errorWithCause("auth.logout.failed", error);
 		return res.status(500).json({
 			success: false,
 			message: "Internal Server Error!",

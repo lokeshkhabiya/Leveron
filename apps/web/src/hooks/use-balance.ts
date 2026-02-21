@@ -5,10 +5,16 @@ import { api } from "@/lib/api";
 
 export const BALANCE_QUERY_KEY = ["balance"] as const;
 
-export function useBalance() {
+type BalanceQueryOptions = {
+	enableBackgroundPolling?: boolean;
+};
+
+export function useBalance({
+	enableBackgroundPolling = true,
+}: BalanceQueryOptions = {}) {
 	return useQuery({
 		queryKey: BALANCE_QUERY_KEY,
 		queryFn: () => api.balance.get(),
-		refetchInterval: 5000,
+		refetchInterval: enableBackgroundPolling ? 15_000 : false,
 	});
 }

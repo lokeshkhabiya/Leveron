@@ -8,6 +8,7 @@ import type {
     orderSide,
     userBalance,
 } from "./types";
+import { createLogger } from "./logger";
 
 const ASSET_CONFIG: Record<
     Asset,
@@ -57,6 +58,21 @@ let lastPriceStreamId = "0";
 let lastOrdersStreamId = "0";
 const CALLBACK_QUEUE = "callback-queue";
 const assetIdCache: Map<Asset, string> = new Map();
+const logger = createLogger("engine.core");
+const ASSET_METADATA: Record<Asset, { name: string; imageUrl: string }> = {
+    BTC: {
+        name: "Bitcoin",
+        imageUrl: "https://assets.coingecko.com/coins/images/1/large/bitcoin.png",
+    },
+    ETH: {
+        name: "Ethereum",
+        imageUrl: "https://assets.coingecko.com/coins/images/279/large/ethereum.png",
+    },
+    SOL: {
+        name: "Solana",
+        imageUrl: "https://assets.coingecko.com/coins/images/4128/large/solana.png",
+    },
+};
 
 type CallbackEventType = "TRADE_OPENED" | "TRADE_CLOSED" | "TRADE_ERROR";
 
@@ -74,22 +90,121 @@ type CallbackPayload = {
 };
 
 redis.on("connect", () => {
-    console.log("[engine:redis] connected!");
+    logger.info("redis.connected");
     isRedisConnected = true;
 });
 
 redis.on("error", (error) => {
-    console.error("[engine:redis] error:", error);
+    logger.errorWithCause("redis.error", error);
     isRedisConnected = false;
 });
 
 redis.on("close", () => {
-    console.log("[engine:redis] connection closed");
+    logger.warn("redis.closed");
     isRedisConnected = false;
 });
 
 function getCloseStatus(reason: CloseReason): "CLOSED" | "LIQUIDATED" {
     return reason === "LIQUIDATION" ? "LIQUIDATED" : "CLOSED";
+}
+
+function isUniqueOrderIdConstraintError(error: unknown) {
+    if (!(error instanceof Error)) {
+        return false;
+    }
+
+    return (
+        error.message.includes("Unique constraint failed") &&
+        error.message.includes("id")
+    );
+}
+
+function isAssetSymbol(value: string): value is Asset {
+    return value === "BTC" || value === "ETH" || value === "SOL";
+}
+
+async function getOpenOrderForClose(orderId: string): Promise<openOrder | null> {
+    const inMemory = openOrders.get(orderId);
+    if (inMemory) {
+        return inMemory;
+    }
+
+    const dbOrder = await prisma.order.findUnique({
+        where: { id: orderId },
+        select: {
+            id: true,
+            userId: true,
+            side: true,
+            quantity: true,
+            entryPrice: true,
+            leverage: true,
+            margin: true,
+            status: true,
+            takeProfit: true,
+            stopLoss: true,
+            liquidationPrice: true,
+            createdAt: true,
+            updatedAt: true,
+            asset: {
+                select: {
+                    symbol: true,
+                },
+            },
+        },
+    });
+
+    if (!dbOrder) {
+        logger.warn("trade.close-order-missing", { orderId });
+        return null;
+    }
+
+    if (dbOrder.status !== "OPEN") {
+        logger.info("trade.close-order-already-finalized", {
+            orderId,
+            status: dbOrder.status,
+        });
+        return null;
+    }
+
+    if (!isAssetSymbol(dbOrder.asset.symbol)) {
+        throw new Error(`Unsupported asset symbol: ${dbOrder.asset.symbol}`);
+    }
+
+    const reconstructed: openOrder = {
+        orderId: dbOrder.id,
+        userId: dbOrder.userId,
+        asset: dbOrder.asset.symbol,
+        side: dbOrder.side,
+        quantity: dbOrder.quantity,
+        entryPrice: dbOrder.entryPrice,
+        leverage: dbOrder.leverage,
+        margin: dbOrder.margin,
+        status: "OPEN",
+        takeProfit: dbOrder.takeProfit ?? undefined,
+        stopLoss: dbOrder.stopLoss ?? undefined,
+        liquidationPrice: dbOrder.liquidationPrice,
+        createdAt: dbOrder.createdAt,
+        updatedAt: dbOrder.updatedAt,
+    };
+
+    openOrders.set(orderId, reconstructed);
+    if (!userOrderIndex.has(reconstructed.userId)) {
+        userOrderIndex.set(reconstructed.userId, new Set());
+    }
+    userOrderIndex.get(reconstructed.userId)!.add(orderId);
+
+    if (!assetOrderIndex.has(reconstructed.asset)) {
+        assetOrderIndex.set(reconstructed.asset, new Set());
+    }
+    assetOrderIndex.get(reconstructed.asset)!.add(orderId);
+
+    logger.info("trade.close-order-rehydrated-from-db", {
+        orderId,
+        userId: reconstructed.userId,
+        asset: reconstructed.asset,
+    });
+
+    return reconstructed;
 }
 
 async function getAssetId(symbol: Asset): Promise<string> {
@@ -98,16 +213,23 @@ async function getAssetId(symbol: Asset): Promise<string> {
         return cachedId;
     }
 
-    const asset = await prisma.asset.findUnique({
+    const metadata = ASSET_METADATA[symbol];
+    const asset = await prisma.asset.upsert({
         where: { symbol },
+        create: {
+            symbol,
+            name: metadata.name,
+            imageUrl: metadata.imageUrl,
+        },
+        update: {},
         select: { id: true },
     });
 
-    if (!asset) {
-        throw new Error(`[engine] Asset not found for symbol: ${symbol}`);
-    }
-
     assetIdCache.set(symbol, asset.id);
+    logger.debug("asset.id-resolved", {
+        symbol,
+        assetId: asset.id,
+    });
     return asset.id;
 }
 
@@ -123,7 +245,11 @@ async function publishCallback(payload: CallbackPayload): Promise<void> {
             })
         );
     } catch (error) {
-        console.error("[engine] Failed to publish callback event:", error);
+        logger.errorWithCause("callback.publish-failed", error, {
+            orderId: payload.orderId,
+            type: payload.type,
+            userId: payload.userId,
+        });
     }
 }
 
@@ -139,6 +265,10 @@ async function loadUserBalance(userId: string): Promise<userBalance> {
         };
 
         await updateBalanceInRedis(userId, defaultBalance);
+        logger.info("balance.initialized", {
+            userId,
+            balance: defaultBalance,
+        });
         return defaultBalance;
     }
 
@@ -157,6 +287,12 @@ async function getOrLoadUserBalance(userId: string): Promise<userBalance> {
 // helper function to update balance in redis.
 async function updateBalanceInRedis(userId: string, balance: userBalance) {
     await redis.hset(`balances`, userId, JSON.stringify(balance));
+    logger.debug("balance.persisted", {
+        userId,
+        available: balance.available,
+        locked: balance.locked,
+        total: balance.total,
+    });
 }
 
 // calculate entry price with slippage
@@ -393,7 +529,10 @@ async function checkAndTriggerTakeProfit_StopLoss(
             try {
                 await processCloseTrade(orderId, reason); 
             } catch (error) {
-                console.error(`[engine] Error closing order ${orderId} via TP/SL:`, error);
+                logger.errorWithCause("trade.close-tp-sl-failed", error, {
+                    orderId,
+                    reason,
+                });
             }
         }
     }
@@ -438,9 +577,12 @@ async function checkAndTriggerLiquidation() {
         const minEquityRequired = usedMargin * ASSET_CONFIG[orders[0]!.asset].maintenanceMarginRate;
 
         if (equity <= minEquityRequired || equity <= 0) {
-            console.log(
-                `[engine:LIQUIDATION] User ${userId} requires liquidation. equity=${equity}, usedMargin=${usedMargin}, minRequired=${minEquityRequired}`
-            );
+            logger.warn("risk.user-liquidation-required", {
+                userId,
+                equity,
+                usedMargin,
+                minEquityRequired,
+            });
 
             // Prioritize liquidating the worst losing positions first.
             const ordersWithPnl = orders
@@ -473,10 +615,10 @@ async function checkAndTriggerLiquidation() {
                 try {
                     await processCloseTrade(order.orderId, "LIQUIDATION");
                 } catch (error) {
-                    console.error(
-                        `[engine] Error liquidating order ${order.orderId}:`,
-                        error
-                    );
+                    logger.errorWithCause("risk.liquidation-failed", error, {
+                        orderId: order.orderId,
+                        userId: order.userId,
+                    });
                 }
             }
         }
@@ -488,7 +630,7 @@ let lastCloseOrdersStreamId = "0";
 
 async function processStreamMessages() {
     if (!isRedisConnected) {
-        console.warn("[engine] redis not connected, waiting...");
+        logger.warn("stream.redis-disconnected-waiting");
         await new Promise((resolve) => {
             redis.once("connect", resolve);
         });
@@ -527,20 +669,20 @@ async function processStreamMessages() {
                             // after all prices updates, check for liquidations 
                             await checkAndTriggerLiquidation(); 
 
-                            console.log(
-                                `[engine] Processed ${priceUpdates.length} price update(s). Current prices:`,
-                                Array.from(currentPrices.values())
-                            );
+                            logger.debug("stream.prices-processed", {
+                                count: priceUpdates.length,
+                            });
                         } else if (streamName === "orders-stream") {
                             lastOrdersStreamId = id;
                             const openTradeData = JSON.parse(
                                 fields[1] as string
                             );
 
-                            console.log(
-                                `[engine] Processing new order:`,
-                                openTradeData
-                            );
+                            logger.info("stream.open-order-message", {
+                                orderId: openTradeData.orderId,
+                                userId: openTradeData.userId,
+                                asset: openTradeData.asset,
+                            });
 
                             await processOpenTrade(openTradeData);
                         } else if (streamName === "close-orders-stream") {
@@ -550,31 +692,34 @@ async function processStreamMessages() {
                                 fields[1] as string 
                             ) as { orderId: string; userId: string };
 
-                            console.log(
-                                `[engine] Processing close order:`,
-                                closeOrderData
-                            );
+                            logger.info("stream.close-order-message", {
+                                orderId: closeOrderData.orderId,
+                                userId: closeOrderData.userId,
+                            });
 
-                            await processCloseTrade(closeOrderData.orderId, "USER");
+                            await processCloseTrade(
+                                closeOrderData.orderId,
+                                "USER",
+                                closeOrderData.userId
+                            );
                         }
                     } catch (error) {
-                        console.log(
-                            `[engine] Error processing message: ${id}:`,
-                            error
-                        );
+                        logger.errorWithCause("stream.message-processing-failed", error, {
+                            stream: streamName,
+                            messageId: id,
+                        });
                     }
                 }
             }
         }
     } catch (error) {
         if (error instanceof Error && error.message.includes("Connection")) {
-            console.error(
-                "[engine] Redis connection error while processing stream data: ",
-                error.message
-            );
+            logger.errorWithCause("stream.redis-connection-error", error, {
+                message: error.message,
+            });
             isRedisConnected = false;
         } else {
-            console.error("[engine] Error reading from stream: ", error);
+            logger.errorWithCause("stream.read-failed", error);
         }
     }
 }
@@ -590,7 +735,25 @@ async function processOpenTrade(openTradeData: {
     takeProfit?: number;
     stopLoss?: number;
 }): Promise<void> {
+    let balance: userBalance | null = null;
+    let balanceAdjusted = false;
+    let requiredAvailable = 0;
+
     try {
+        const existingOrder = await prisma.order.findUnique({
+            where: { id: openTradeData.orderId },
+            select: { id: true, status: true },
+        });
+
+        if (existingOrder) {
+            logger.warn("trade.open-duplicate-skipped", {
+                orderId: openTradeData.orderId,
+                userId: openTradeData.userId,
+                status: existingOrder.status,
+            });
+            return;
+        }
+
         const priceUpdate = currentPrices.get(openTradeData.asset);
         if (!priceUpdate) {
             throw new Error(
@@ -602,7 +765,7 @@ async function processOpenTrade(openTradeData: {
         const currentPrice = parseFloat(priceUpdate.price);
 
         // 1) Load balance and validate leverage/position size
-        const balance = await loadUserBalance(openTradeData.userId);
+        balance = await loadUserBalance(openTradeData.userId);
 
         validateLeverage(openTradeData.leverage, asset);
         validatePositionSize(
@@ -630,7 +793,7 @@ async function processOpenTrade(openTradeData: {
 
         // 4) Compute open fee and ensure sufficient balance
         const openFee = calculateFee(openOrder, entryPrice, "OPEN");
-        const requiredAvailable = openTradeData.margin + openFee;
+        requiredAvailable = openTradeData.margin + openFee;
 
         if (balance.available < requiredAvailable) {
             throw new Error(
@@ -645,6 +808,16 @@ async function processOpenTrade(openTradeData: {
 
         balances.set(openTradeData.userId, balance);
         await updateBalanceInRedis(openTradeData.userId, balance);
+        balanceAdjusted = true;
+        logger.info("balance.locked-for-open-trade", {
+            orderId: openTradeData.orderId,
+            userId: openTradeData.userId,
+            margin: openTradeData.margin,
+            openFee,
+            available: balance.available,
+            locked: balance.locked,
+            total: balance.total,
+        });
 
         openOrders.set(openTradeData.orderId, openOrder);
 
@@ -694,10 +867,45 @@ async function processOpenTrade(openTradeData: {
             entryPrice: openOrder.entryPrice,
         });
 
-        console.log(
-            `[engine] Open trade ${openTradeData.orderId} processed successfully.`
-        );
+        logger.info("trade.opened", {
+            orderId: openTradeData.orderId,
+            userId: openTradeData.userId,
+            asset: openOrder.asset,
+            entryPrice: openOrder.entryPrice,
+            quantity: openOrder.quantity,
+        });
     } catch (error) {
+        if (balanceAdjusted && balance) {
+            balance.available += requiredAvailable;
+            balance.locked = Math.max(0, balance.locked - openTradeData.margin);
+            balance.total = balance.available + balance.locked;
+
+            balances.set(openTradeData.userId, balance);
+            try {
+                await updateBalanceInRedis(openTradeData.userId, balance);
+                logger.warn("balance.rollback-open-trade", {
+                    orderId: openTradeData.orderId,
+                    userId: openTradeData.userId,
+                    available: balance.available,
+                    locked: balance.locked,
+                    total: balance.total,
+                });
+            } catch (rollbackError) {
+                logger.errorWithCause("balance.rollback-open-trade-failed", rollbackError, {
+                    orderId: openTradeData.orderId,
+                    userId: openTradeData.userId,
+                });
+            }
+        }
+
+        if (isUniqueOrderIdConstraintError(error)) {
+            logger.warn("trade.open-duplicate-after-race", {
+                orderId: openTradeData.orderId,
+                userId: openTradeData.userId,
+            });
+            return;
+        }
+
         await publishCallback({
             type: "TRADE_ERROR",
             orderId: openTradeData.orderId,
@@ -709,23 +917,31 @@ async function processOpenTrade(openTradeData: {
                     : "Unknown error while opening trade",
         });
 
-        console.error(
-            `[engine] Error processing open trade ${openTradeData.orderId}:`,
-            error
-        );
+        logger.errorWithCause("trade.open-failed", error, {
+            orderId: openTradeData.orderId,
+            userId: openTradeData.userId,
+            asset: openTradeData.asset,
+        });
         throw error;
     }
 }
 
 async function processCloseTrade(
     orderId: string,
-    reason: CloseReason
+    reason: CloseReason,
+    requestedByUserId?: string
 ): Promise<void> {
-    const order = openOrders.get(orderId);
+    let order: openOrder | null = null;
 
     try {
+        order = await getOpenOrderForClose(orderId);
+
         if (!order) {
-            throw new Error(`Order ${orderId} not found`);
+            return;
+        }
+
+        if (requestedByUserId && order.userId !== requestedByUserId) {
+            throw new Error("Order ownership mismatch");
         }
 
         const priceUpdate = currentPrices.get(order.asset);
@@ -754,6 +970,16 @@ async function processCloseTrade(
 
         balances.set(order.userId, balance);
         await updateBalanceInRedis(order.userId, balance);
+        logger.info("balance.released-for-close-trade", {
+            orderId,
+            userId: order.userId,
+            reason,
+            realizedAmount,
+            closeFee,
+            available: balance.available,
+            locked: balance.locked,
+            total: balance.total,
+        });
 
         // 4. update order state
         const now = new Date();
@@ -803,14 +1029,20 @@ async function processCloseTrade(
             pnl,
         });
 
-        console.log(
-            `[engine] close tab ${orderId}. reason=${reason}, pnl=${pnl} fee=${closeFee}, closePrice=${markPrice}`
-        );
+        logger.info("trade.closed", {
+            orderId,
+            userId: order.userId,
+            reason,
+            status: closeStatus,
+            closePrice: markPrice,
+            pnl,
+            closeFee,
+        });
     } catch (error) {
         await publishCallback({
             type: "TRADE_ERROR",
             orderId,
-            userId: order?.userId,
+            userId: requestedByUserId ?? order?.userId,
             asset: order?.asset,
             reason,
             message:
@@ -819,15 +1051,22 @@ async function processCloseTrade(
                     : "Unknown error while closing trade",
         });
 
+        logger.errorWithCause("trade.close-failed", error, {
+            orderId,
+            reason,
+            requestedByUserId,
+            orderUserId: order?.userId,
+        });
+
         throw error;
     }
 }
 
 async function startEngine() {
-    console.log("[engine] Starting price engine...");
+    logger.info("engine.starting");
 
     if (!isRedisConnected) {
-        console.log("[engine] Waiting for redis connection...");
+        logger.info("engine.waiting-for-redis");
         await new Promise((resolve) => {
             redis.once("connect", resolve);
         });
@@ -839,13 +1078,13 @@ async function startEngine() {
 }
 
 function shutdown() {
-    console.error("[engine] shutting down..");
+    logger.warn("engine.shutdown");
     redis.disconnect();
     process.exit(0);
 }
 
 startEngine().catch((error) => {
-    console.error("[engine] Fatal error: ", error);
+    logger.errorWithCause("engine.fatal-error", error);
     process.exit(1);
 });
 

@@ -1,52 +1,104 @@
 "use client";
 
 import AuthGuard from "@/components/auth-guard";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { useBalance } from "@/hooks/use-balance";
-import { useUser } from "@/hooks/use-auth";
+import Header from "@/components/header";
+import BalanceDisplay from "@/components/trading/balance-display";
+import OpenPositions from "@/components/trading/open-positions";
+import OrderForm from "@/components/trading/order-form";
+import OrderHistory from "@/components/trading/order-history";
+import PriceChart from "@/components/trading/price-chart";
+import PriceDisplay from "@/components/trading/price-display";
 import { useLivePrices } from "@/hooks/use-prices";
-import { useOpenOrders } from "@/hooks/use-trades";
-import { useEffect } from "react";
+import type { AssetSymbol } from "@/lib/api";
+import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 
 export default function Home() {
-	const { data: user } = useUser();
-	const { data: balance } = useBalance();
-	const { data: openOrders } = useOpenOrders();
-	const { prices, isConnected } = useLivePrices();
-
-	useEffect(() => {
-		if (prices.length > 0) {
-			console.log("useLivePrices updates:", prices);
-		}
-	}, [prices]);
-
 	return (
 		<AuthGuard>
-			<div className="mx-auto w-full max-w-4xl space-y-4 px-4 py-6">
-				<Card className="border-border/80 shadow-none">
-					<CardHeader>
-						<CardTitle>Account</CardTitle>
-					</CardHeader>
-					<CardContent className="space-y-1 text-sm">
-						<p>Email: {user?.email ?? "-"}</p>
-						<p>
-							Balance:{" "}
-							{balance ? `${balance.available.toFixed(2)} available` : "Loading..."}
-						</p>
-						<p>Open Orders: {openOrders?.length ?? 0}</p>
-					</CardContent>
-				</Card>
-
-				<Card className="border-border/80 shadow-none">
-					<CardHeader>
-						<CardTitle>Realtime Stream</CardTitle>
-					</CardHeader>
-					<CardContent className="space-y-1 text-sm">
-						<p>Status: {isConnected ? "Connected" : "Disconnected"}</p>
-						<p>Tracked Assets: {prices.length}</p>
-					</CardContent>
-				</Card>
-			</div>
+			<TradingDashboard />
 		</AuthGuard>
+	);
+}
+
+function TradingDashboard() {
+	const [selectedAsset, setSelectedAsset] = useState<AssetSymbol>("BTC");
+	const { pricesByAsset, isConnected, tradeEvents, error } = useLivePrices();
+	const lastHandledTradeEventRef = useRef<string | null>(null);
+	const lastHandledErrorRef = useRef<string | null>(null);
+	const markPrice = pricesByAsset[selectedAsset]
+		? Number(pricesByAsset[selectedAsset].price)
+		: null;
+
+	useEffect(() => {
+		const latestEvent = tradeEvents[0];
+		if (!latestEvent) {
+			return;
+		}
+
+		const eventKey = `${latestEvent.type}:${latestEvent.orderId}:${latestEvent.timestamp ?? ""}:${latestEvent.message ?? ""}`;
+		if (lastHandledTradeEventRef.current === eventKey) {
+			return;
+		}
+		lastHandledTradeEventRef.current = eventKey;
+
+		if (latestEvent.type === "TRADE_OPENED") {
+			toast.success("Order opened", {
+				description: latestEvent.orderId,
+			});
+			return;
+		}
+
+		if (latestEvent.type === "TRADE_CLOSED") {
+			toast.success("Order closed", {
+				description: latestEvent.orderId,
+			});
+			return;
+		}
+
+		if (latestEvent.type === "TRADE_ERROR") {
+			toast.error("Trade failed", {
+				description: latestEvent.message ?? "Unknown trading error",
+			});
+		}
+	}, [tradeEvents]);
+
+	useEffect(() => {
+		if (!error || lastHandledErrorRef.current === error) {
+			return;
+		}
+
+		lastHandledErrorRef.current = error;
+		toast.error("Live stream issue", { description: error });
+	}, [error]);
+
+	return (
+		<div className="min-h-screen bg-background">
+			<Header isLiveConnected={isConnected} />
+			<main className="mx-auto w-full max-w-[1400px] space-y-4 px-4 py-4 md:py-6">
+				<BalanceDisplay isLiveConnected={isConnected} />
+				<PriceDisplay
+					selectedAsset={selectedAsset}
+					onSelectAsset={setSelectedAsset}
+					pricesByAsset={pricesByAsset}
+					isConnected={isConnected}
+				/>
+
+				<section className="grid gap-4 xl:grid-cols-[2fr_1fr]">
+					<PriceChart asset={selectedAsset} interval="1m" />
+					<OrderForm
+						selectedAsset={selectedAsset}
+						onSelectAsset={setSelectedAsset}
+						markPrice={markPrice}
+					/>
+				</section>
+
+				<OpenPositions
+					pricesByAsset={pricesByAsset}
+					isLiveConnected={isConnected}
+				/>
+				<OrderHistory isLiveConnected={isConnected} />
+			</main>
+			</div>
 	);
 }

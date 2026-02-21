@@ -21,12 +21,27 @@ First, install the dependencies:
 ```bash
 bun install
 ```
+
+## Local Infra (Postgres + Redis)
+
+Start dependencies with Docker Compose:
+
+```bash
+docker compose up -d
+```
+
+Copy root env template and adjust values:
+
+```bash
+cp .env.example .env
+```
+
 ## Database Setup
 
 This project uses PostgreSQL with Prisma.
 
-1. Make sure you have a PostgreSQL database set up.
-2. Update your `apps/server/.env` file with your PostgreSQL connection details.
+1. Ensure `DATABASE_URL` in `.env` points to a running Postgres instance.
+2. Ensure `REDIS_HOST` / `REDIS_PORT` point to Redis.
 
 3. Generate the Prisma client and push the schema:
 ```bash

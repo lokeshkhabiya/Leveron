@@ -1,0 +1,38 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: leveron-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: leveron
+      POSTGRES_USER: leveron
+      POSTGRES_PASSWORD: leveron
+    ports:
+      - "5432:5432"
+    volumes:
+      - leveron-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U leveron -d leveron"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: leveron-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - leveron-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  leveron-postgres-data:
+  leveron-redis-data:

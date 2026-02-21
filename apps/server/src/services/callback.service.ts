@@ -1,6 +1,8 @@
 import { createRedisClient } from "@leveron/redis";
+import { createLogger } from "@/utils/logger";
 
 const CALLBACK_STREAM = "callback-queue";
+const logger = createLogger("server.callback-service");
 
 export type TradeCallbackEvent = {
 	type: "TRADE_OPENED" | "TRADE_CLOSED" | "TRADE_ERROR";
@@ -37,7 +39,7 @@ function notifyHandlers(event: TradeCallbackEvent) {
 		try {
 			handler(event);
 		} catch (error) {
-			console.error("[callback-service] handler error:", error);
+			logger.errorWithCause("callback.handler-error", error);
 		}
 	}
 }
@@ -59,10 +61,12 @@ export async function startCallbackListener() {
 	const callbackRedis = createRedisClient();
 
 	callbackRedis.on("error", (error) => {
-		console.error("[callback-service] redis error:", error);
+		logger.errorWithCause("callback.redis-error", error);
 	});
 
-	console.log("[callback-service] listener started");
+	logger.info("callback.listener-started", {
+		startStreamId: lastCallbackStreamId,
+	});
 
 	while (true) {
 		try {
@@ -89,17 +93,23 @@ export async function startCallbackListener() {
 
 					try {
 						const event = JSON.parse(eventRaw) as TradeCallbackEvent;
+						logger.info("callback.event-received", {
+							type: event.type,
+							orderId: event.orderId,
+							userId: event.userId,
+						});
 						notifyHandlers(event);
 					} catch (error) {
-						console.error(
-							"[callback-service] Failed to parse callback message:",
-							error
+						logger.errorWithCause(
+							"callback.message-parse-failed",
+							error,
+							{ messageId },
 						);
 					}
 				}
 			}
 		} catch (error) {
-			console.error("[callback-service] listener loop error:", error);
+			logger.errorWithCause("callback.listener-loop-error", error);
 			await new Promise((resolve) => setTimeout(resolve, 1000));
 		}
 	}

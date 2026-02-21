@@ -7,8 +7,12 @@ import authRouter from "./routes/auth.routes";
 import balanceRouter from "./routes/balance.routes";
 import pricesRouter from "./routes/prices.routes";
 import tradeRouter from "./routes/trade.routes";
+import requestLogger from "./middleware/request-logger.middleware";
 import { startCallbackListener } from "./services/callback.service";
+import { createLogger } from "./utils/logger";
+
 const app = express();
+const logger = createLogger("server.app");
 
 app.use(
 	cors({
@@ -20,6 +24,7 @@ app.use(
 
 app.use(express.json());
 app.use(cookieParser());
+app.use(requestLogger);
 
 app.get("/", (_req, res) => {
 	res.status(200).send("OK");
@@ -33,5 +38,8 @@ app.use("/api/prices", pricesRouter);
 const port = process.env.PORT || 8080;
 app.listen(port, () => {
 	void startCallbackListener();
-	console.log(`Server is running on port ${port}`);
+	logger.info("server.started", {
+		port: Number(port),
+		corsOrigin: process.env.CORS_ORIGIN || "",
+	});
 });

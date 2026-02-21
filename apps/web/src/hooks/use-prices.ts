@@ -1,7 +1,11 @@
 "use client";
 
 import { getApiUrl, type PriceUpdate, type TradeCallbackEvent } from "@/lib/api";
+import { createLogger } from "@/lib/logger";
+import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { BALANCE_QUERY_KEY } from "./use-balance";
+import { ORDER_HISTORY_QUERY_KEY, OPEN_ORDERS_QUERY_KEY } from "./use-trades";
 
 type PriceEventPayload = {
 	updates: PriceUpdate[];
@@ -21,6 +25,8 @@ function parseEventData<T>(event: Event): T | null {
 }
 
 export function useLivePrices() {
+	const logger = useMemo(() => createLogger("web.live-prices"), []);
+	const queryClient = useQueryClient();
 	const [pricesByAsset, setPricesByAsset] = useState<Record<string, PriceUpdate>>({});
 	const [tradeEvents, setTradeEvents] = useState<TradeCallbackEvent[]>([]);
 	const [isConnected, setIsConnected] = useState(false);
@@ -34,6 +40,7 @@ export function useLivePrices() {
 		const onConnected = () => {
 			setIsConnected(true);
 			setError(null);
+			logger.info("sse.connected");
 		};
 
 		const onPrice = (event: Event) => {
@@ -58,16 +65,23 @@ export function useLivePrices() {
 			}
 
 			setTradeEvents((previous) => [payload, ...previous].slice(0, 100));
+			void queryClient.invalidateQueries({ queryKey: OPEN_ORDERS_QUERY_KEY });
+			void queryClient.invalidateQueries({ queryKey: ORDER_HISTORY_QUERY_KEY });
+			void queryClient.invalidateQueries({ queryKey: BALANCE_QUERY_KEY });
 		};
 
 		const onServerError = (event: Event) => {
 			const payload = parseEventData<ErrorEventPayload>(event);
 			setError(payload?.message ?? "Server sent an SSE error");
+			logger.warn("sse.server-error", {
+				message: payload?.message ?? "Server sent an SSE error",
+			});
 		};
 
 		const onBrowserError = () => {
 			setIsConnected(false);
 			setError("Connection to live price stream failed");
+			logger.warn("sse.connection-error");
 		};
 
 		eventSource.onopen = onConnected;
@@ -84,7 +98,23 @@ export function useLivePrices() {
 			eventSource.removeEventListener("error", onServerError);
 			eventSource.close();
 		};
-	}, []);
+	}, [logger, queryClient]);
+
+	useEffect(() => {
+		if (isConnected) {
+			return;
+		}
+
+		const interval = window.setInterval(() => {
+			void queryClient.invalidateQueries({ queryKey: OPEN_ORDERS_QUERY_KEY });
+			void queryClient.invalidateQueries({ queryKey: ORDER_HISTORY_QUERY_KEY });
+			void queryClient.invalidateQueries({ queryKey: BALANCE_QUERY_KEY });
+		}, 10_000);
+
+		return () => {
+			window.clearInterval(interval);
+		};
+	}, [isConnected, queryClient]);
 
 	const prices = useMemo(() => Object.values(pricesByAsset), [pricesByAsset]);
 

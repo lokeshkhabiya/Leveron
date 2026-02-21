@@ -1,5 +1,6 @@
 import ws from "ws";
 import redis from "@leveron/redis";
+import { createLogger } from "./logger";
 
 export type PriceUpdate = {
     asset: string;
@@ -25,19 +26,20 @@ let wsClient: ws | null = null;
 let pollInterval: NodeJS.Timeout | null = null;
 let isRedisConnected = false;
 const priceUpdates: PriceUpdates = new Map();
+const logger = createLogger("poller.core");
 
 redis.on("connect", () => {
-    console.log("[poller:redis] connected!");
+    logger.info("redis.connected");
     isRedisConnected = true;
 });
 
 redis.on("error", (error) => {
-    console.error("[poller:redis] error:", error);
+    logger.errorWithCause("redis.error", error);
     isRedisConnected = false;
 });
 
 redis.on("close", () => {
-    console.log("[poller:redis] connection closed");
+    logger.warn("redis.closed");
     isRedisConnected = false;
 });
 
@@ -71,7 +73,7 @@ function processWebSocketMessage(data: unknown) {
 
         handlePriceUpdate(symbol, price, timestamp);
     } catch (error) {
-        console.error("[poller] Error processing message:", error);
+        logger.errorWithCause("ws.message-processing-failed", error);
     }
 }
 
@@ -79,7 +81,7 @@ function createWebSocket(): ws {
     const client = new ws(CONFIG.WS_URL);
 
     client.on("open", () => {
-        console.log("[poller] WebSocket connected");
+        logger.info("ws.connected");
         const subscribeMessage = {
             id: 2,
             method: "SUBSCRIBE",
@@ -98,16 +100,16 @@ function createWebSocket(): ws {
                     : Buffer.concat(raw as Buffer[]).toString("utf8");
             processWebSocketMessage(JSON.parse(jsonString));
         } catch (error) {
-            console.error("[poller] Error parsing message:", error);
+            logger.errorWithCause("ws.message-parse-failed", error);
         }
     });
 
     client.on("error", (error) => {
-        console.error("[poller] WebSocket error:", error);
+        logger.errorWithCause("ws.error", error);
     });
 
     client.on("close", () => {
-        console.log("[poller] WebSocket closed, reconnecting...");
+        logger.warn("ws.closed-reconnecting");
         setTimeout(() => {
             wsClient = createWebSocket();
         }, 5000);
@@ -118,7 +120,7 @@ function createWebSocket(): ws {
 
 async function publishPriceUpdates() {
     if (!isRedisConnected) {
-        console.warn("[poller] Redis not connected, skipping publish");
+        logger.warn("publish.skipped.redis-disconnected");
         return;
     }
 
@@ -134,22 +136,26 @@ async function publishPriceUpdates() {
             "priceUpdates",
             JSON.stringify(updatesArray)
         );
-        console.log("[poller] current prices:", updatesArray);
+        logger.debug("prices.published", {
+            count: updatesArray.length,
+        });
     } catch (error) {
-        console.error("[poller] Error publishing to Redis:", error);
+        logger.errorWithCause("publish.failed", error);
     }
 }
 
 function startPoller() {
     if (!isRedisConnected) {
-        console.log("[poller] Waiting for Redis connection...");
+        logger.info("poller.waiting-for-redis");
         redis.once("connect", () => {
             startPoller();
         });
         return;
     }
 
-    console.log("[poller] Starting price poller");
+    logger.info("poller.started", {
+        symbols: CONFIG.SYMBOLS,
+    });
     wsClient = createWebSocket();
 
     pollInterval = setInterval(() => {
@@ -158,7 +164,7 @@ function startPoller() {
 }
 
 function shutdown() {
-    console.log("[poller] Shutting down...");
+    logger.warn("poller.shutdown");
 
     if (pollInterval) {
         clearInterval(pollInterval);
