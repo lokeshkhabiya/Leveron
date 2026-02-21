@@ -168,7 +168,7 @@ sequenceDiagram
     U->>S: GET /api/auth/verify?token=...
     S->>S: verifySignupToken(token)
     S->>DB: find/create user + update lastLoggedIn
-    S->>U: Set-Cookie leveron_token; redirect / (web)
+    S->>U: Set-Cookie leveron_token and redirect to web app
 
     W->>S: GET /api/auth/me (cookie)
     S-->>W: Auth user payload
